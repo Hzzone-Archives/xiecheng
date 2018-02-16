@@ -7,6 +7,8 @@ import config
 import smtplib
 from email.mime.text import MIMEText
 import time
+from qcloudsms_py import SmsSingleSender
+from qcloudsms_py.httpclient import HTTPError
 
 import logging
 logger = logging.getLogger(__name__)
@@ -23,14 +25,15 @@ logger.addHandler(handler)
 logger.addHandler(console)
 
 logger.info('''
-    start station: %s
-    arrive station: %s
+    stations: %s
     wish date: %s
     qq email address: %s
     inform email address: %s
+    inform phone number: %s
     refreshing interval: %ss
-    ''' % (config.start_station, config.arrive_station, " ".join(config.wish_date_list), 
-        config.qq_email_address, config.inform_email_address, config.interval))
+    expected lowest price: %s
+    ''' % (config.planes, " ".join(config.wish_date_list), 
+        config.qq_email_address, config.inform_email_address, config.inform_phonenumber, config.interval, config.wish_down_threshold))
 
 '''
 subject: 主题
@@ -51,6 +54,19 @@ def sendEmail(subject, msg, _to):
         s.quit()
     except smtplib.SMTPException as e:
         logger.error("Falied,%s"%e)
+
+def sendSMS(phonenumber, send_content):
+    appid = 1111
+    appkey = "11111"
+    template_id = 111
+    ssender = SmsSingleSender(appid, appkey)
+    result = ssender.send_with_param(86, phonenumber,
+            template_id, send_content)['result']
+    if result == 0:
+        logger.debug("send sms result code:", result)
+    else:
+        logging.error("send sms Falied")
+
 
 headers1={
     "Host":"flights.ctrip.com",
@@ -112,7 +128,7 @@ def getData(city1,city2,date):
         else:
             logger.error("未匹配到对应url信息")
         js="function getUrl(){var i='';var lastUrl='';var url='"+indexUrl+"';"+js+"ajaxRequest(url"+para+"');return lastUrl;}"
-        
+        # print(js)
         #执行加密js得到加密后的url
         ctx=execjs.compile(js)
         dataUrl=(ctx.call("getUrl"))
@@ -151,29 +167,29 @@ def main():
 	#获取所有城市
     with open("city_info.json","r") as f:
         all_city=json.loads(f.read())
-
-    try:
-        city1_code = all_city[config.start_station]
-        city2_code = all_city[config.arrive_station]
-    except:
-        logger.error("没有该城市编码")
     while True:
-        for wish_date in config.wish_date_list:
-            info_list = getData(city1_code, city2_code, wish_date)
-            # print(info_list)
-            try:
-                loweset_plane = info_list[0]
-            except:
-                logger.error('爬取到的数据为空')
-                exit(1)
-            logger.info('<%s->%s %s> current loweset price: %s' % (config.start_station, config.arrive_station, wish_date, loweset_plane[-1]))
-            if loweset_plane[-1] <= config.wish_down_threshold:
-                send_content = "航班 %s\n<%s %s> 到 <%s %s>\n出发时间: %s\n到达时间: %s\n现价: %s\n" % (
-                        loweset_plane[0], loweset_plane[1], loweset_plane[2], loweset_plane[3], loweset_plane[4],
-                        loweset_plane[5], loweset_plane[6], loweset_plane[7])
-                sendEmail('携程机票心愿最低价达成', send_content, config.inform_email_address)
-                logger.info(send_content)
-            time.sleep(10)
+        for city1_name, city2_name in config.planes:
+            city1_code = all_city[city1_name]
+            city2_code = all_city[city2_name]
+            for wish_date in config.wish_date_list:
+                while True:
+                    try:
+                        info_list = getData(city1_code, city2_code, wish_date)
+                        loweset_plane = info_list[0]
+                        break
+                    except:
+                        logger.error('爬取到的数据为空')
+                        time.sleep(10)
+                        continue
+                logger.info('<%s---->>> %s %s> current loweset price: %s' % (city1_name, city2_name, wish_date, loweset_plane[-1]))
+                if loweset_plane[-1] <= config.wish_down_threshold:
+                    send_content = "航班 %s\n<%s %s> 到 <%s %s>\n出发时间: %s\n到达时间: %s\n现价: %s\n" % (
+                            loweset_plane[0], loweset_plane[1], loweset_plane[2], loweset_plane[3], loweset_plane[4],
+                            loweset_plane[5], loweset_plane[6], loweset_plane[7])
+                    # sendEmail('携程机票心愿最低价达成', send_content, config.inform_email_address)
+                    sendSMS(config.inform_phonenumber, [loweset_plane[0], loweset_plane[1]+" "+loweset_plane[2], loweset_plane[3]+" "+loweset_plane[4], loweset_plane[5], loweset_plane[6], loweset_plane[7]])
+                    logger.info(send_content)
+                time.sleep(10)
         time.sleep(config.interval)
 
 if __name__ == '__main__':
